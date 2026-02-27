@@ -74,8 +74,9 @@ def _get_ocr_predictor():
 # Configuration
 # =============================================================================
 
-DATA_FOLDER = '/Users/madhavayyagari/ml-from-scratch/my_data'
-OUTPUT_FILE = '/Users/madhavayyagari/ml-from-scratch/data/documents.json'
+_BASE = os.path.dirname(os.path.abspath(__file__))
+DATA_FOLDER = os.path.join(_BASE, 'my_data')
+OUTPUT_FILE = os.path.join(_BASE, 'data', 'documents.json')
 MIN_TEXT_THRESHOLD = 100  # chars below which we try OCR
 
 # =============================================================================

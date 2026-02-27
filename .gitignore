@@ -1,9 +1,23 @@
+# Environment & secrets
 .env
-.venv/
-data/
-my_data/
-__pycache__/
-*.pyc
-.DS_Store
 token.json
 credentials.json
+
+# Personal data (never commit)
+data/
+my_data/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

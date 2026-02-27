@@ -33,7 +33,7 @@ load_dotenv()
 # Configuration
 # =============================================================================
 
-PROJECT_DIR = '/Users/madhavayyagari/ml-from-scratch'
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_PATH = os.path.join(PROJECT_DIR, 'data/documents.json')
 CHROMA_PATH = os.path.join(PROJECT_DIR, 'data/chroma_db')
 

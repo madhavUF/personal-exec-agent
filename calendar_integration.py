@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
-PROJECT_DIR = '/Users/madhavayyagari/ml-from-scratch'
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_PATH = os.path.join(PROJECT_DIR, 'token.json')
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']

@@ -17,173 +17,23 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-import anthropic
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from rag import get_engine
 from load_documents import load_txt, load_md, load_pdf, load_docx, load_image, chunk_text, PDF_SUPPORT, DOCX_SUPPORT
 import calendar_integration
+import gmail_integration
+from src.agent import run_agent
 
 app = FastAPI(title="Personal AI Agent")
 
-PROJECT_DIR = '/Users/madhavayyagari/ml-from-scratch'
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_PATH = os.path.join(PROJECT_DIR, 'data/documents.json')
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_DIR, "static")), name="static")
-
-
-# =============================================================================
-# Agent: Intent Classification + Routing
-# =============================================================================
-
-def classify_intent(query):
-    """Classify the user's intent using keyword pre-check + Claude Haiku fallback."""
-    q = query.lower()
-
-    # Keyword pre-check for calendar
-    calendar_keywords = ['schedule', 'meeting', 'meetings', 'calendar', 'appointment',
-                         'event', 'events', 'today', 'tomorrow', 'this week', 'busy',
-                         'free time', 'available']
-    if any(kw in q for kw in calendar_keywords):
-        return 'calendar'
-
-    # Keyword pre-check for documents/personal info
-    doc_keywords = ['my ', 'license', 'passport', 'ssn', 'social security',
-                    'insurance', 'address', 'phone number', 'account',
-                    'document', 'id number', 'birth', 'expir', 'policy',
-                    'vin', 'registration', 'certificate', 'note', 'notes',
-                    'wrote', 'saved', 'recorded', 'bill', 'invoice', 'payment',
-                    'receipt', 'statement', 'att', 'at&t', 'verizon', 'tmobile']
-    if any(kw in q for kw in doc_keywords):
-        return 'documents'
-
-    # Fall back to Claude for ambiguous queries
-    client = anthropic.Anthropic()
-
-    prompt = f"""Classify this query into one category. Respond with ONLY the category name.
-
-Categories:
-- "calendar" : about schedule, meetings, events, appointments
-- "documents" : about user's personal stored information, records, IDs, files
-- "general" : general knowledge, greetings, how-to questions
-
-Query: {query}
-
-Category:"""
-
-    try:
-        message = client.messages.create(
-            model="claude-haiku-4-20250414",
-            max_tokens=20,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        intent = message.content[0].text.strip().lower().strip('"')
-        if intent in ('calendar', 'documents', 'general'):
-            return intent
-        return 'general'
-    except Exception:
-        return 'general'
-
-
-def handle_calendar_query(query):
-    """Handle calendar-related queries."""
-    if not calendar_integration.is_authenticated():
-        return {
-            "answer": "Google Calendar is not connected. Please click the 'Connect' button in the sidebar to authorize access.",
-            "intent": "calendar",
-            "sources": []
-        }
-
-    events = calendar_integration.get_upcoming_events(days=7)
-    if events is None:
-        return {
-            "answer": "Failed to fetch calendar events. Please try reconnecting Google Calendar.",
-            "intent": "calendar",
-            "sources": []
-        }
-
-    # Format events as context for Claude
-    if not events:
-        events_text = "No upcoming events found in the next 7 days."
-    else:
-        event_lines = []
-        for e in events:
-            start = e['start']
-            summary = e['summary']
-            location = f" at {e['location']}" if e['location'] else ""
-            event_lines.append(f"- {start}: {summary}{location}")
-        events_text = "\n".join(event_lines)
-
-    # Use Claude to answer based on calendar context
-    client = anthropic.Anthropic()
-    prompt = f"""Based on the following calendar events, answer the user's question.
-Today is {datetime.now().strftime('%A, %B %d, %Y')}.
-
-UPCOMING EVENTS:
-{events_text}
-
-QUESTION: {query}"""
-
-    try:
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return {
-            "answer": message.content[0].text,
-            "intent": "calendar",
-            "sources": ["Google Calendar"]
-        }
-    except Exception as e:
-        return {
-            "answer": f"Error generating calendar answer: {e}",
-            "intent": "calendar",
-            "sources": []
-        }
-
-
-def handle_documents_query(query):
-    """Handle document search queries via RAG."""
-    engine = get_engine()
-    # Normalize phone numbers in query (spaces/dashes to dots) for better matching
-    import re
-    normalized_query = re.sub(r'(\d{3})[\s\-](\d{3})[\s\-](\d{4})', r'\1.\2.\3', query)
-    results = engine.search(normalized_query, top_k=8)  # More chunks for complex queries
-    answer = engine.generate_answer(query, results)
-    sources = list(set(r['source'] for r in results)) if results else []
-
-    return {
-        "answer": answer,
-        "intent": "documents",
-        "sources": sources
-    }
-
-
-def handle_general_query(query):
-    """Handle general knowledge queries."""
-    client = anthropic.Anthropic()
-
-    try:
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=512,
-            messages=[{"role": "user", "content": query}]
-        )
-        return {
-            "answer": message.content[0].text,
-            "intent": "general",
-            "sources": []
-        }
-    except Exception as e:
-        return {
-            "answer": f"Error: {e}",
-            "intent": "general",
-            "sources": []
-        }
 
 
 # =============================================================================
@@ -192,25 +42,29 @@ def handle_general_query(query):
 
 @app.post("/api/chat")
 async def chat(request: Request):
-    """Main agent endpoint: classify intent and route to handler."""
+    """Main agent endpoint: run Claude tool_use agent loop."""
     body = await request.json()
     query = body.get("query", "").strip()
+    session_id = body.get("session_id", None)
 
     if not query:
         return JSONResponse({"error": "Empty query"}, status_code=400)
 
-    # Classify intent
-    intent = classify_intent(query)
-
-    # Route to appropriate handler
-    if intent == "calendar":
-        result = handle_calendar_query(query)
-    elif intent == "documents":
-        result = handle_documents_query(query)
-    else:
-        result = handle_general_query(query)
-
+    result = run_agent(query, session_id=session_id)
     return JSONResponse(result)
+
+
+@app.post("/api/shortcut")
+async def shortcut(request: Request):
+    """Shortcut-friendly endpoint: returns plain text for macOS Shortcuts."""
+    body = await request.json()
+    query = body.get("query", "").strip()
+
+    if not query:
+        return PlainTextResponse("Error: empty query", status_code=400)
+
+    result = run_agent(query, session_id=None)
+    return PlainTextResponse(result["answer"])
 
 
 @app.get("/api/status")
@@ -225,6 +79,7 @@ async def status():
 
     return JSONResponse({
         "calendar": calendar_integration.is_authenticated(),
+        "gmail": gmail_integration.is_authenticated(),
         "documents": True,
         "notes": notes_connected
     })
@@ -364,10 +219,11 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/auth/google")
 async def auth_google(request: Request):
-    """Start Google OAuth flow."""
+    """Start Google OAuth flow (includes Calendar + Gmail scopes)."""
     redirect_uri = "http://localhost:8000/auth/google/callback"
     try:
-        flow = calendar_integration.get_oauth_flow(redirect_uri)
+        # Use gmail_integration which has combined scopes
+        flow = gmail_integration.get_oauth_flow(redirect_uri)
         auth_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
@@ -388,10 +244,10 @@ async def auth_google_callback(request: Request):
         return JSONResponse({"error": "No authorization code received"}, status_code=400)
 
     try:
-        flow = calendar_integration.get_oauth_flow(redirect_uri)
+        flow = gmail_integration.get_oauth_flow(redirect_uri)
         flow.fetch_token(code=code)
         creds = flow.credentials
-        calendar_integration.save_credentials(creds)
+        gmail_integration.save_credentials(creds)
         # Redirect back to dashboard
         return RedirectResponse("/")
     except Exception as e:

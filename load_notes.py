@@ -17,7 +17,7 @@ import os
 import subprocess
 from datetime import datetime
 
-PROJECT_DIR = '/Users/madhavayyagari/ml-from-scratch'
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_PATH = os.path.join(PROJECT_DIR, 'data/documents.json')
 CHUNK_SIZE = 500  # characters per chunk
 BATCH_SIZE = 50   # notes per AppleScript call
