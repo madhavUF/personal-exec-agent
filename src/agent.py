@@ -16,9 +16,10 @@ from typing import Callable
 import urllib.request
 import urllib.error
 
-import anthropic
 from dotenv import load_dotenv
 load_dotenv()
+
+from src.llm_client import LLMClient
 
 from rag import get_engine
 import calendar_integration
@@ -714,7 +715,7 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
             "sources": list  # source filenames from document search results
         }
     """
-    client = anthropic.Anthropic()
+    client = LLMClient.from_env()
 
     # Session management
     if session_id is None:
@@ -723,8 +724,8 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
 
     messages = _get_or_create_session(session_id)
 
-    # Build user message — include image block if provided
-    if image_data:
+    # Build user message — include image block if provided (vision-capable models only)
+    if image_data and client.supports_vision:
         user_content = [
             {
                 "type": "image",
@@ -737,7 +738,7 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
             {"type": "text", "text": query}
         ]
     else:
-        user_content = query
+        user_content = query if not image_data else f"[Image attached — vision not supported by this model]\n\n{query}"
 
     messages.append({"role": "user", "content": user_content})
 
@@ -747,51 +748,32 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
     sources: list[str] = []
 
     for _ in range(max_iterations):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            system=system,
-            tools=TOOLS,
-            messages=messages
-        )
+        response = client.create(messages, TOOLS, system)
 
         if response.stop_reason == "end_turn":
-            # Extract final text from response
-            answer = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    answer = block.text
-                    break
-
             # Persist assistant message and save to DB
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "assistant", "content": response.text})
             _save_session(session_id, messages)
 
             return {
-                "answer": answer,
+                "answer": response.text,
                 "intent": _derive_intent(tools_used),
                 "sources": sorted(set(sources))
             }
 
         elif response.stop_reason == "tool_use":
-            # Persist the full assistant message (includes tool_use blocks)
-            messages.append({"role": "assistant", "content": response.content})
+            # Persist the assistant message (provider-normalised)
+            messages.append({"role": "assistant", "content": response.text or ""})
 
-            # Execute each tool_use block and collect results
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-
-                tool_name = block.name
-                tool_input = block.input
+            # Execute each tool call and collect results
+            results: list[str] = []
+            for call in response.tool_calls:
+                tool_name  = call["name"]
+                tool_input = call["input"]
                 tools_used.append(tool_name)
 
                 executor = TOOL_EXECUTORS.get(tool_name)
-                if executor is None:
-                    result = {"error": f"Unknown tool: {tool_name}"}
-                else:
-                    result = executor(tool_input)
+                result   = executor(tool_input) if executor else {"error": f"Unknown tool: {tool_name}"}
 
                 # Collect document sources
                 if tool_name == "search_documents" and "results" in result:
@@ -800,17 +782,12 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
                         if src:
                             sources.append(src)
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result)
-                })
+                results.append(json.dumps(result))
 
-            # Feed tool results back to Claude
-            messages.append({"role": "user", "content": tool_results})
+            # Feed tool results back in provider-specific format
+            messages.extend(client.build_tool_result_messages(response.tool_calls, results))
 
         else:
-            # Unexpected stop reason
             break
 
     # Max iterations exceeded
