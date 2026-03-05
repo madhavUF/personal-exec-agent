@@ -676,6 +676,45 @@ def clear_session(session_id: str) -> None:
 
 
 # =============================================================================
+# Smart Client Routing (Groq tier selection)
+# =============================================================================
+#
+# When MODEL_PROVIDER=groq, queries are routed to the cheapest capable tier:
+#   Tier 1 — Llama 4 Scout    (~$0.11/M)  fast lookups, tool calls
+#   Tier 2 — Qwen3 32B        (~$0.29/M)  writing, summarisation
+#   Tier 3 — Kimi K2          (~$1.00/M)  complex reasoning, analysis
+#   Vision — Claude Sonnet    (fallback)  images always need Claude
+#
+# Override tiers via env vars: GROQ_TIER1_MODEL, GROQ_TIER2_MODEL, GROQ_TIER3_MODEL
+
+_GROQ_TIER1 = os.getenv("GROQ_TIER1_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+_GROQ_TIER2 = os.getenv("GROQ_TIER2_MODEL", "qwen/qwen3-32b")
+_GROQ_TIER3 = os.getenv("GROQ_TIER3_MODEL", "moonshotai/kimi-k2-instruct-0905")
+_CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+_TIER2_KEYWORDS = {"draft", "write", "compose", "summarize", "summarise", "proofread", "rephrase", "rewrite"}
+_TIER3_KEYWORDS = {"analyze", "analyse", "compare", "evaluate", "research", "strategy", "review my", "plan my"}
+
+
+def _pick_client(query: str, image_data: dict = None) -> LLMClient:
+    """Pick the cheapest model capable of handling this query."""
+    # Images always need Claude Vision
+    if image_data:
+        return LLMClient.from_env(provider="claude", model=_CLAUDE_MODEL)
+
+    # Only apply tier routing when using Groq
+    if os.getenv("MODEL_PROVIDER", "claude").lower() != "groq":
+        return LLMClient.from_env()
+
+    q = query.lower()
+    if any(kw in q for kw in _TIER3_KEYWORDS):
+        return LLMClient.from_env(provider="groq", model=_GROQ_TIER3)
+    if any(kw in q for kw in _TIER2_KEYWORDS):
+        return LLMClient.from_env(provider="groq", model=_GROQ_TIER2)
+    return LLMClient.from_env(provider="groq", model=_GROQ_TIER1)
+
+
+# =============================================================================
 # Intent Derivation
 # =============================================================================
 
@@ -715,7 +754,7 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
             "sources": list  # source filenames from document search results
         }
     """
-    client = LLMClient.from_env()
+    client = _pick_client(query, image_data)
 
     # Session management
     if session_id is None:

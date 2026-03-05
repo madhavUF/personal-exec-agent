@@ -64,9 +64,9 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def from_env() -> "LLMClient":
-        provider = os.getenv("MODEL_PROVIDER", "claude").lower()
-        model    = os.getenv("MODEL_NAME", "claude-sonnet-4-6")
+    def from_env(provider: str = None, model: str = None) -> "LLMClient":
+        provider = (provider or os.getenv("MODEL_PROVIDER", "claude")).lower()
+        model    = model or os.getenv("MODEL_NAME", "claude-sonnet-4-6")
 
         if provider == "claude":
             return ClaudeClient(model=model)
