@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.llm_client import LLMClient
+from src.memory import save_memory, get_all_memories, search_memories, delete_memory, format_memories_for_prompt
+from src.web_research import web_search, read_webpage
 
 from rag import get_engine
 import calendar_integration
@@ -339,6 +341,114 @@ TOOLS = [
             },
             "required": ["to", "subject", "body"]
         }
+    },
+    # -------------------------------------------------------------------------
+    # Long-term Memory
+    # -------------------------------------------------------------------------
+    {
+        "name": "remember_fact",
+        "description": (
+            "Save an important fact, preference, or piece of information about the user "
+            "to long-term memory. Use this proactively when the user shares something "
+            "meaningful — a preference, a person they mention, a routine, or any fact "
+            "they'd want you to remember in future conversations. "
+            "Examples: 'prefers concise email replies', 'boss is Sarah Chen at Acme Corp', "
+            "'standup every Mon/Wed/Fri at 9am', 'lives in San Francisco'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact or preference to remember, written as a clear statement."
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["preference", "person", "routine", "fact", "general"],
+                    "description": "Category: preference (how they like things), person (someone they know), routine (recurring pattern), fact (one-off info), general (other)."
+                }
+            },
+            "required": ["content", "category"]
+        }
+    },
+    {
+        "name": "forget_fact",
+        "description": (
+            "Delete a memory by its ID. Use when the user says something is no longer true "
+            "or asks you to forget something. First recall the memory list to find the ID."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "integer",
+                    "description": "The ID of the memory to delete."
+                }
+            },
+            "required": ["memory_id"]
+        }
+    },
+    {
+        "name": "recall_memories",
+        "description": (
+            "Search long-term memory for facts relevant to a query. "
+            "Use this when you need to look up something specific you might have been told before."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for in memory."
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    # -------------------------------------------------------------------------
+    # Web Research
+    # -------------------------------------------------------------------------
+    {
+        "name": "web_search",
+        "description": (
+            "Search the web for current information. Use for researching people, companies, "
+            "news, stock prices, events, or any topic requiring up-to-date information. "
+            "Returns a list of results with titles, URLs, and snippets. "
+            "Follow up with read_webpage to get the full content of a specific result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default: 5).",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_webpage",
+        "description": (
+            "Fetch and read the full text content of a webpage URL. "
+            "Use after web_search to get more detail from a specific result. "
+            "Also use when the user shares a link they want you to read or summarize."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full URL to fetch and read."
+                }
+            },
+            "required": ["url"]
+        }
     }
 ]
 
@@ -544,6 +654,29 @@ def _execute_create_email_draft(to: str, subject: str, body: str) -> dict:
         return {"error": f"Create draft failed: {e}"}
 
 
+def _execute_remember_fact(content: str, category: str = "general") -> dict:
+    return save_memory(content, category)
+
+
+def _execute_forget_fact(memory_id: int) -> dict:
+    return delete_memory(memory_id)
+
+
+def _execute_recall_memories(query: str) -> dict:
+    results = search_memories(query)
+    if not results:
+        return {"memories": [], "message": "No matching memories found."}
+    return {"memories": results}
+
+
+def _execute_web_search(query: str, max_results: int = 5) -> dict:
+    return web_search(query, max_results=max_results)
+
+
+def _execute_read_webpage(url: str) -> dict:
+    return read_webpage(url)
+
+
 # Dispatch table: tool name → executor lambda
 TOOL_EXECUTORS: dict[str, Callable] = {
     "save_document":     lambda inp: _execute_save_document(inp["title"], inp["content"]),
@@ -559,6 +692,13 @@ TOOL_EXECUTORS: dict[str, Callable] = {
     "get_daily_goals":   lambda inp: _execute_get_daily_goals(inp["user_id"]),
     "save_daily_goals":  lambda inp: _execute_save_daily_goals(inp["user_id"], inp["goals"]),
     "update_goal_status": lambda inp: _execute_update_goal_status(inp["user_id"], inp["goal_number"], inp.get("completed", True)),
+    # Memory
+    "remember_fact":     lambda inp: _execute_remember_fact(inp["content"], inp.get("category", "general")),
+    "forget_fact":       lambda inp: _execute_forget_fact(inp["memory_id"]),
+    "recall_memories":   lambda inp: _execute_recall_memories(inp["query"]),
+    # Web research
+    "web_search":        lambda inp: _execute_web_search(inp["query"], inp.get("max_results", 5)),
+    "read_webpage":      lambda inp: _execute_read_webpage(inp["url"]),
 }
 
 
@@ -566,23 +706,33 @@ TOOL_EXECUTORS: dict[str, Callable] = {
 # System Prompt
 # =============================================================================
 
-SYSTEM_PROMPT = """You are a personal AI assistant with access to the user's documents, calendar, and email.
+SYSTEM_PROMPT = """You are a personal AI executive assistant with access to the user's documents, calendar, email, smart home, and the web.
 Today is {today}.
 
 ## Capabilities
 - **Documents**: Search personal documents, notes, IDs, insurance, receipts, and any uploaded files. Also save new notes/information using `save_document`.
 - **Calendar**: Check upcoming events and schedule via Google Calendar.
 - **Email**: Read inbox, search emails, create drafts, or send emails via Gmail.
+- **Smart home**: Check and control Nest thermostats and cameras.
+- **Web research**: Search the web and read webpages for up-to-date information using `web_search` and `read_webpage`.
+- **Long-term memory**: Remember facts about the user with `remember_fact`. Forget outdated info with `forget_fact`. Search memory with `recall_memories`.
 - **Vision**: Analyze photos and images sent by the user — plants, objects, text in images, receipts, etc.
 - **General knowledge**: Answer questions using your training knowledge when no tool is needed.
 
-## Guidelines
-- Use tools proactively when the query is about personal data, schedule, or email.
-- Call multiple tools in the same turn if needed to give a complete answer.
-- For email composition: **always use `create_email_draft` by default**. Only call `send_email` if the user explicitly says "send it now" or "go ahead and send".
+## Long-term Memory Guidelines
+- **Proactively remember** anything important the user shares: preferences, people they mention, routines, key facts.
+- If the user says "my boss is X" or "I prefer Y" or "I always do Z on Mondays" — call `remember_fact` immediately.
+- Memories in the section below are already injected — no need to search for them unless you need something specific.
+- If a memory is outdated, use `forget_fact` and save the updated version.
+
+## General Guidelines
+- Use tools proactively when the query is about personal data, schedule, email, or current events.
+- For web research: use `web_search` first to find relevant URLs, then `read_webpage` to get full content.
+- For email composition: **always use `create_email_draft` by default**. Only call `send_email` if the user explicitly says "send it now".
 - If a tool returns an error about not being connected, inform the user and guide them to connect via the sidebar.
 - Be concise but thorough. Format responses with markdown when it helps readability.
-"""
+
+{memory_section}"""
 
 
 # =============================================================================
@@ -781,7 +931,12 @@ def run_agent(query: str, session_id: str = None, max_iterations: int = 10, imag
 
     messages.append({"role": "user", "content": user_content})
 
-    system = SYSTEM_PROMPT.format(today=datetime.now().strftime("%A, %B %d, %Y"))
+    memories = get_all_memories()
+    memory_section = format_memories_for_prompt(memories)
+    system = SYSTEM_PROMPT.format(
+        today=datetime.now().strftime("%A, %B %d, %Y"),
+        memory_section=memory_section,
+    )
 
     tools_used: list[str] = []
     sources: list[str] = []

@@ -22,6 +22,9 @@ chromadb
 anthropic
 openai
 
+# Web research
+duckduckgo-search
+
 # Config
 pyyaml
 python-dotenv
