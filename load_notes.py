@@ -17,9 +17,10 @@ import os
 import subprocess
 from datetime import datetime
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCS_PATH = os.path.join(PROJECT_DIR, 'data/documents.json')
-CHUNK_SIZE = 500  # characters per chunk
+from src.config import PROJECT_DIR, get_docs_path_str, get_chunking
+
+DOCS_PATH = get_docs_path_str()
+CHUNK_SIZE = get_chunking().get("chunk_size", 500)
 BATCH_SIZE = 50   # notes per AppleScript call
 
 

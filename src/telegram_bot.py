@@ -14,8 +14,8 @@ import logging
 import os
 import sys
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.env_loader import load_env
+load_env()
 
 from PIL import Image
 
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.agent import run_agent, clear_session
 from src.goals import register_user, get_all_chat_ids, get_today_goals, format_goals_status
+from src.morning_brief import generate_morning_brief
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -105,6 +106,7 @@ HELP_TEXT = """
 /start — welcome message
 /reset — clear conversation history
 /goals — see today's goals
+/brief — get your morning brief now (also runs at 8 AM)
 /help or /tools — this menu
 """.strip()
 
@@ -231,21 +233,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ---------------------------------------------------------------------------
 
 async def job_morning_prompt(context) -> None:
-    """8:00 AM — ask user to set 3 goals for the day."""
+    """8:00 AM — LLM-generated personalized morning brief."""
     for user in get_all_chat_ids():
         try:
+            user_id = int(user["user_id"])
+            name = os.getenv("USER_DISPLAY_NAME") or user.get("username") or "there"
+            brief = generate_morning_brief(user_id, user_name=name)
+            # Telegram max 4096 chars
+            if len(brief) > 4096:
+                brief = brief[:4090] + "…"
             await context.bot.send_message(
                 chat_id=user["chat_id"],
-                text=(
-                    "Good morning, Madhav! 🌅\n\n"
-                    "What are your *3 goals for today?*\n\n"
-                    "Reply with them numbered:\n"
-                    "1. ...\n2. ...\n3. ..."
-                ),
+                text=brief,
                 parse_mode="Markdown"
             )
         except Exception:
-            logger.exception("Morning prompt failed for chat_id %s", user["chat_id"])
+            logger.exception("Morning brief failed for chat_id %s", user["chat_id"])
 
 
 async def job_checkin(context) -> None:
@@ -315,8 +318,24 @@ def main() -> None:
     jq.run_daily(job_evening_wrap,   time=__import__("datetime").time(20, 0, tzinfo=CT))
 
     # --- Command & message handlers ---
+    # /brief — manually trigger morning brief (for testing)
+    async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = update.effective_user.id
+        register_user(user_id, update.effective_chat.id, update.effective_user.username)
+        name = os.getenv("USER_DISPLAY_NAME") or update.effective_user.username or "there"
+        await update.message.chat.send_action(ChatAction.TYPING)
+        try:
+            brief = generate_morning_brief(user_id, user_name=name)
+            if len(brief) > 4096:
+                brief = brief[:4090] + "…"
+            await update.message.reply_text(brief, parse_mode="Markdown")
+        except Exception as e:
+            logger.exception("Brief failed")
+            await update.message.reply_text(f"Sorry, brief failed: {e}")
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("brief", cmd_brief))
     app.add_handler(CommandHandler("help",  cmd_help))
     app.add_handler(CommandHandler("tools", cmd_tools))
     app.add_handler(CommandHandler("goals", cmd_goals))

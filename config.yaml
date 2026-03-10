@@ -68,3 +68,17 @@ llm:
 privacy:
   show_sources: true
   log_queries: false
+
+# API / server
+api:
+  upload_max_mb: 20
+
+# Morning brief (8am Telegram)
+morning_brief:
+  weather_location: "Austin, TX"
+
+# Recruiter agent — resume-only context (separate from main RAG)
+recruiter:
+  resume_files:
+    - "my_data/resume.md"
+    - "my_data/Madhav_Ayyagari_Resume_LPM.pdf"

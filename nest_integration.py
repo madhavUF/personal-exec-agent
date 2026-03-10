@@ -17,9 +17,11 @@ import requests
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import Flow
-from dotenv import load_dotenv
+from src.env_loader import load_env
+from src.egress import ensure_allowed_url
+from src.security import safe_error_message
 
-load_dotenv()
+load_env()
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_PATH  = os.path.join(PROJECT_DIR, "data", "nest_token.json")
@@ -140,13 +142,15 @@ def _api_get(path: str) -> dict:
     creds = _get_valid_creds()
     if not creds:
         return {"error": "Nest not authenticated"}
+    url = f"{SDM_BASE_URL}/{path}"
+    ensure_allowed_url(url)
     resp = requests.get(
-        f"{SDM_BASE_URL}/{path}",
+        url,
         headers={"Authorization": f"Bearer {creds.token}"},
         timeout=10,
     )
     if not resp.ok:
-        return {"error": f"SDM API error {resp.status_code}: {resp.text}"}
+        return {"error": f"SDM API error {resp.status_code}: {safe_error_message(resp.text)}"}
     return resp.json()
 
 
@@ -154,8 +158,10 @@ def _api_post(path: str, body: dict) -> dict:
     creds = _get_valid_creds()
     if not creds:
         return {"error": "Nest not authenticated"}
+    url = f"{SDM_BASE_URL}/{path}"
+    ensure_allowed_url(url)
     resp = requests.post(
-        f"{SDM_BASE_URL}/{path}",
+        url,
         headers={
             "Authorization": f"Bearer {creds.token}",
             "Content-Type": "application/json",
@@ -164,7 +170,7 @@ def _api_post(path: str, body: dict) -> dict:
         timeout=10,
     )
     if not resp.ok:
-        return {"error": f"SDM API error {resp.status_code}: {resp.text}"}
+        return {"error": f"SDM API error {resp.status_code}: {safe_error_message(resp.text)}"}
     return resp.json() if resp.text else {"success": True}
 
 

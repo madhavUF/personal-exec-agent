@@ -17,8 +17,8 @@ import os
 import json
 from datetime import datetime, timedelta
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.env_loader import load_env
+load_env()
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_PATH = os.path.join(PROJECT_DIR, 'token.json')

@@ -193,6 +193,13 @@
             font-style: italic;
         }
 
+        .message .model-badge {
+            margin-top: 8px;
+            font-size: 10px;
+            color: #6b7280;
+            font-family: ui-monospace, monospace;
+        }
+
         .message pre {
             background: #1a1a2e;
             padding: 8px 12px;
@@ -418,6 +425,69 @@
             color: #7ab8ff;
         }
 
+        .approvals-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .approvals-header input {
+            flex: 1;
+            background: #0f1f2e;
+            border: 1px solid #2a2a4a;
+            color: #e0e0e0;
+            border-radius: 6px;
+            font-size: 11px;
+            padding: 6px 8px;
+        }
+
+        .mini-btn {
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #fff;
+            font-size: 11px;
+            padding: 6px 8px;
+            cursor: pointer;
+        }
+
+        .mini-btn.secondary {
+            background: #1a1a2e;
+        }
+
+        .mini-btn.reject {
+            background: #7f1d1d;
+            border-color: #991b1b;
+        }
+
+        .approval-item {
+            border-bottom: 1px solid #2a2a4a;
+            padding: 8px 0;
+            font-size: 12px;
+        }
+
+        .approval-item:last-child {
+            border-bottom: none;
+        }
+
+        .approval-meta {
+            color: #9ca3af;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .approval-title {
+            font-weight: 600;
+            color: #e5e7eb;
+            margin-bottom: 4px;
+        }
+
+        .approval-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .container {
@@ -520,6 +590,22 @@
                 </div>
                 <div id="uploadStatus" class="upload-status"></div>
             </div>
+
+            <div class="widget" id="approvalsWidget">
+                <h3>Approvals</h3>
+                <div class="approvals-header">
+                    <input type="password" id="approvalKeyInput" placeholder="Approval API key">
+                    <input type="text" id="approvalTotpInput" placeholder="TOTP code">
+                    <button class="mini-btn secondary" onclick="saveApprovalAuth()">Save</button>
+                    <button class="mini-btn" onclick="loadApprovals()">Refresh</button>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <button class="mini-btn secondary" onclick="showTotpSetup()">Show TOTP setup URI</button>
+                </div>
+                <div id="approvalsContent">
+                    <div class="empty-state">Enter key and refresh</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -529,6 +615,18 @@
         const sendBtn = document.getElementById('sendBtn');
         const typingIndicator = document.getElementById('typingIndicator');
         const sessionId = crypto.randomUUID();
+        const approvalKeyInput = document.getElementById('approvalKeyInput');
+        const approvalTotpInput = document.getElementById('approvalTotpInput');
+
+        // Restore approval auth in-memory for this browser session.
+        const existingApprovalKey = sessionStorage.getItem('approvalApiKey') || '';
+        const existingApprovalTotp = sessionStorage.getItem('approvalTotpCode') || '';
+        if (existingApprovalKey) {
+            approvalKeyInput.value = existingApprovalKey;
+        }
+        if (existingApprovalTotp) {
+            approvalTotpInput.value = existingApprovalTotp;
+        }
 
         // Send on Enter
         queryInput.addEventListener('keydown', (e) => {
@@ -555,12 +653,22 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query, session_id: sessionId })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({}));
                 typingIndicator.style.display = 'none';
-                addMessage(data.answer, 'assistant', data.intent, data.sources);
+                if (!res.ok) {
+                    let msg = data.error || data.detail;
+                    if (typeof msg === 'object') msg = JSON.stringify(msg);
+                    if (!msg) msg = `Server error ${res.status}`;
+                    addMessage(`Error: ${msg}`, 'assistant', 'general', [], null, null);
+                } else if (data.error) {
+                    addMessage(data.error, 'assistant', 'general', [], null, null);
+                } else {
+                    addMessage(data.answer, 'assistant', data.intent, data.sources, data.model, data.provider);
+                }
             } catch (err) {
                 typingIndicator.style.display = 'none';
-                addMessage('Error connecting to the server.', 'assistant', 'general', []);
+                const msg = err.message || 'Connection failed. Is the server running? Try: python app.py';
+                addMessage(`Error: ${msg}`, 'assistant', 'general', [], null, null);
             }
 
             sendBtn.disabled = false;
@@ -568,7 +676,7 @@
             scrollToBottom();
         }
 
-        function addMessage(text, role, intent, sources) {
+        function addMessage(text, role, intent, sources, model, provider) {
             const div = document.createElement('div');
             div.className = `message ${role}`;
 
@@ -580,6 +688,10 @@
                 html += `<div>${formatText(text)}</div>`;
                 if (sources && sources.length > 0) {
                     html += `<div class="sources">Sources: ${sources.join(', ')}</div>`;
+                }
+                if (model || provider) {
+                    const modelLabel = [provider, model].filter(Boolean).join(' / ') || 'Unknown';
+                    html += `<div class="model-badge">${modelLabel}</div>`;
                 }
                 div.innerHTML = html;
             } else {
@@ -691,6 +803,128 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // ======================
+        // Approvals
+        // ======================
+        function approvalHeaders() {
+            const key = sessionStorage.getItem('approvalApiKey') || '';
+            const totp = sessionStorage.getItem('approvalTotpCode') || '';
+            const h = {};
+            if (key) h['x-approval-key'] = key;
+            if (totp) h['x-approval-totp'] = totp;
+            return h;
+        }
+
+        function saveApprovalAuth() {
+            const key = approvalKeyInput.value.trim();
+            const totp = approvalTotpInput.value.trim();
+            if (!key && !totp) {
+                sessionStorage.removeItem('approvalApiKey');
+                sessionStorage.removeItem('approvalTotpCode');
+                document.getElementById('approvalsContent').innerHTML = '<div class="empty-state">Approval auth cleared</div>';
+                return;
+            }
+            if (key) sessionStorage.setItem('approvalApiKey', key);
+            if (totp) sessionStorage.setItem('approvalTotpCode', totp);
+            document.getElementById('approvalsContent').innerHTML = '<div class="empty-state">Auth saved. Click refresh.</div>';
+        }
+
+        async function loadApprovals() {
+            const key = sessionStorage.getItem('approvalApiKey') || '';
+            const totp = sessionStorage.getItem('approvalTotpCode') || '';
+            const el = document.getElementById('approvalsContent');
+            if (!key && !totp) {
+                el.innerHTML = '<div class="empty-state">Enter approval key or TOTP above</div>';
+                return;
+            }
+            try {
+                const res = await fetch('/api/approvals?limit=20', { headers: approvalHeaders() });
+                const data = await res.json();
+                if (!res.ok) {
+                    el.innerHTML = `<div class="empty-state">Error: ${escapeHtml(data.detail || data.error || 'Unauthorized')}</div>`;
+                    return;
+                }
+                const pending = data.pending || [];
+                if (!pending.length) {
+                    el.innerHTML = '<div class="empty-state">No pending approvals</div>';
+                    return;
+                }
+                let html = '';
+                for (const item of pending) {
+                    html += `<div class="approval-item">
+                        <div class="approval-meta">#${item.id} • ${escapeHtml(item.created_at_utc || '')}</div>
+                        <div class="approval-title">${escapeHtml(item.tool_name || 'action')}</div>
+                        <div style="color:#a1a1aa;">${escapeHtml(JSON.stringify(item.action_input || {}))}</div>
+                        <div class="approval-actions">
+                            <button class="mini-btn" onclick="approveAction(${item.id})">Approve</button>
+                            <button class="mini-btn reject" onclick="rejectAction(${item.id})">Reject</button>
+                        </div>
+                    </div>`;
+                }
+                el.innerHTML = html;
+            } catch (err) {
+                el.innerHTML = '<div class="empty-state">Error loading approvals</div>';
+            }
+        }
+
+        async function approveAction(id) {
+            try {
+                const res = await fetch(`/api/approvals/${id}/approve`, {
+                    method: 'POST',
+                    headers: approvalHeaders()
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert(`Approve failed: ${data.error || data.detail || 'Unknown error'}`);
+                }
+                await loadApprovals();
+            } catch (err) {
+                alert('Approve failed: network error');
+            }
+        }
+
+        async function rejectAction(id) {
+            const reason = prompt('Reject reason (optional):', '') || '';
+            try {
+                const res = await fetch(`/api/approvals/${id}/reject`, {
+                    method: 'POST',
+                    headers: { ...approvalHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert(`Reject failed: ${data.error || data.detail || 'Unknown error'}`);
+                }
+                await loadApprovals();
+            } catch (err) {
+                alert('Reject failed: network error');
+            }
+        }
+
+        async function showTotpSetup() {
+            const el = document.getElementById('approvalsContent');
+            try {
+                const res = await fetch('/api/approvals/totp-setup', { headers: approvalHeaders() });
+                const data = await res.json();
+                if (!res.ok) {
+                    el.innerHTML = `<div class="empty-state">TOTP setup error: ${escapeHtml(data.error || data.detail || 'Unauthorized')}</div>`;
+                    return;
+                }
+                const uri = data.otpauth_uri || '';
+                if (!uri) {
+                    el.innerHTML = '<div class="empty-state">No TOTP URI available</div>';
+                    return;
+                }
+                el.innerHTML = `<div class="approval-item">
+                    <div class="approval-title">TOTP setup URI</div>
+                    <div style="word-break:break-all;color:#a1a1aa;">${escapeHtml(uri)}</div>
+                    <div class="approval-meta">Use this URI in a TOTP app if QR import is supported.</div>
+                </div>`;
+            } catch (err) {
+                el.innerHTML = '<div class="empty-state">TOTP setup request failed</div>';
+            }
         }
 
         // ======================
@@ -822,6 +1056,8 @@
         loadCalendar();
         loadDocuments();
         loadNest();
+        loadApprovals();
+        setInterval(loadApprovals, 15000);
         queryInput.focus();
     </script>
 </body>

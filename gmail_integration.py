@@ -17,10 +17,20 @@ import json
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import parseaddr
 from datetime import datetime
 
-from dotenv import load_dotenv
-load_dotenv()
+# Placeholder domains to reject (LLMs sometimes invent these)
+_PLACEHOLDER_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
+
+
+def _extract_email_from_header(from_header: str) -> str:
+    """Extract the actual email address from a From header like 'Mia Alvarez <kia@dealer.com>'."""
+    _, addr = parseaddr(from_header or "")
+    return addr.strip() if addr else ""
+
+from src.env_loader import load_env
+load_env()
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_PATH = os.path.join(PROJECT_DIR, 'token.json')
@@ -120,6 +130,11 @@ def send_email(to: str, subject: str, body: str, html: bool = False, as_assistan
     Returns:
         dict with success status and message ID or error
     """
+    if not to or "@" not in to:
+        return {"success": False, "error": "Recipient must be a valid email address. Use search_emails to find the address if you only have a name."}
+    domain = to.split("@")[-1].lower() if "@" in to else ""
+    if domain in _PLACEHOLDER_DOMAINS:
+        return {"success": False, "error": "Do not use placeholder addresses (example.com, etc.). Use search_emails to find the real address from the user's inbox."}
     service = get_gmail_service()
     if not service:
         return {"success": False, "error": "Gmail not authenticated"}
@@ -173,6 +188,11 @@ def create_draft(to: str, subject: str, body: str, as_assistant: bool = True) ->
     Returns:
         dict with success status and draft ID or error
     """
+    if not to or "@" not in to:
+        return {"success": False, "error": "Recipient must be a valid email address. Use search_emails to find the address if you only have a name."}
+    domain = to.split("@")[-1].lower() if "@" in to else ""
+    if domain in _PLACEHOLDER_DOMAINS:
+        return {"success": False, "error": "Do not use placeholder addresses (example.com, etc.). Use search_emails to find the real address from the user's inbox."}
     service = get_gmail_service()
     if not service:
         return {"success": False, "error": "Gmail not authenticated"}
@@ -238,9 +258,11 @@ def get_recent_emails(max_results: int = 10) -> list:
             ).execute()
 
             headers = {h['name']: h['value'] for h in msg_data['payload']['headers']}
+            from_val = headers.get('From', 'Unknown')
             emails.append({
                 'id': msg['id'],
-                'from': headers.get('From', 'Unknown'),
+                'from': from_val,
+                'from_email': _extract_email_from_header(from_val),
                 'subject': headers.get('Subject', 'No subject'),
                 'date': headers.get('Date', ''),
                 'snippet': msg_data.get('snippet', '')
@@ -286,9 +308,11 @@ def search_emails(query: str, max_results: int = 10) -> list:
             ).execute()
 
             headers = {h['name']: h['value'] for h in msg_data['payload']['headers']}
+            from_val = headers.get('From', 'Unknown')
             emails.append({
                 'id': msg['id'],
-                'from': headers.get('From', 'Unknown'),
+                'from': from_val,
+                'from_email': _extract_email_from_header(from_val),
                 'subject': headers.get('Subject', 'No subject'),
                 'date': headers.get('Date', ''),
                 'snippet': msg_data.get('snippet', '')

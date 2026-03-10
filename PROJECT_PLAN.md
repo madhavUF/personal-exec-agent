@@ -61,30 +61,24 @@ AI: "You decided to launch MVP in Q2, with John on frontend..."
 
 ## Project Phases
 
-### Phase 1: Foundation (Current)
-**Status: ✅ Mostly Complete**
+### Phase 1: Foundation
+**Status: ✅ Complete**
 
-What we have:
-- [x] Basic document loading (txt, md, pdf, docx)
+- [x] Basic document loading (txt, md, pdf, docx, images with OCR)
 - [x] Text embeddings (sentence-transformers)
-- [x] Cosine similarity search
-- [x] Chunking for large documents
-- [x] Simple CLI interface
-
-What to add:
-- [ ] Better project structure
-- [ ] Configuration file
-- [ ] Persistent database (SQLite or ChromaDB)
+- [x] ChromaDB vector store + hybrid search
+- [x] Chunking for large documents (config-driven)
+- [x] Configuration file (config.yaml) used by RAG, loader, app
+- [x] Simple CLI (rag.py) and project structure
 
 ### Phase 2: Enhanced Processing
-**Status: 🔲 Not Started**
+**Status: 🔶 In Progress**
 
-Goals:
-- [ ] OCR for images with text (pytesseract)
-- [ ] Screenshot text extraction
+- [x] OCR for images (docTR)
+- [x] Smarter chunking (section-aware for Markdown)
+- [x] Privacy: exclude folders/patterns from config when indexing
 - [ ] Better metadata extraction (dates, authors)
-- [ ] Smarter chunking (by sections, paragraphs)
-- [ ] File watching (auto-index new files)
+- [ ] File watching (auto-index new files) or Re-index API (done: POST /api/reindex)
 
 ### Phase 3: Image Support
 **Status: 🔲 Not Started**
@@ -96,44 +90,40 @@ Goals:
 - [ ] Photo organization by content
 
 ### Phase 4: Claude Integration
-**Status: 🔲 Not Started**
+**Status: ✅ Complete**
 
-Goals:
-- [ ] Claude API connection
-- [ ] Conversational interface
-- [ ] Multi-turn memory
-- [ ] Send images to Claude for analysis
+- [x] Claude API (and Groq/Ollama/OpenAI via MODEL_PROVIDER)
+- [x] Conversational interface (web + Telegram)
+- [x] Multi-turn memory (SQLite sessions, 30-day TTL)
+- [x] Send images to Claude for analysis (vision)
 
 ### Phase 5: Always-On Assistant
-**Status: 🔲 Not Started**
+**Status: ✅ Complete**
 
-Goals:
-- [ ] Background service (auto-start on Mac)
-- [ ] API endpoint (FastAPI)
-- [ ] Voice input option (Whisper)
-- [ ] Menu bar app or CLI daemon
-- [ ] Mobile access (via API)
+- [x] Background service (install_daemon.sh, launchd)
+- [x] FastAPI server + /docs, /redoc
+- [x] Menu bar app (macOS)
+- [x] Mobile access (Telegram bot)
+- [ ] Voice input (Whisper) — optional
 
 ### Phase 6: Polish & Deploy
-**Status: 🔲 Not Started**
+**Status: 🔶 In Progress**
 
-Goals:
-- [ ] Clean GitHub repo with README
+- [x] README and clean repo
+- [x] Privacy controls (exclude in config.yaml)
+- [x] Upload size limit (config: api.upload_max_mb)
 - [ ] Docker container option
-- [ ] Privacy controls (exclude sensitive files)
 - [ ] Backup/restore functionality
 - [ ] Usage dashboard
 
 ### Phase 7: Productize for Others
-**Status: 🔲 Not Started**
+**Status: 🔶 In Progress**
 
-Goals:
-- [ ] Easy setup script (one command install)
+- [x] Install script (scripts/install.sh)
 - [ ] Configuration wizard (guided setup)
-- [ ] Multiple platform support (Mac, Windows, Linux)
+- [ ] Multiple platform support (Windows, Linux)
 - [ ] Documentation and tutorials
 - [ ] Example use cases and templates
-- [ ] Community feedback integration
 - [ ] Optional cloud sync (encrypted)
 - [ ] Pricing model exploration (open core?)
 
@@ -208,25 +198,25 @@ curl http://localhost:8000/ask?q="What's my DL number?"
 
 | Component | Current | Future Option |
 |-----------|---------|---------------|
-| Embeddings | sentence-transformers | Same |
+| Embeddings | sentence-transformers (config) | Same |
 | Image embeddings | - | CLIP |
-| OCR | - | pytesseract |
-| Vector DB | numpy files | ChromaDB or SQLite |
-| LLM | - | Claude API |
-| API | - | FastAPI |
+| OCR | docTR | Same |
+| Vector DB | ChromaDB (config) | Same |
+| LLM | Claude / Groq / Ollama / OpenAI | Same |
+| API | FastAPI + /docs, /redoc | Same |
 | Voice | - | Whisper |
 
 ## Privacy Considerations
 
 - All indexing happens locally
 - Only relevant chunks sent to Claude (not entire files)
-- Can exclude sensitive folders (config.yaml)
+- Exclude sensitive folders/patterns in config.yaml (used by load_documents)
 - API key stored securely (environment variable)
+- Optional AgentGate: OAuth tokens never in agent process
 
 ## Next Steps
 
-1. Reorganize project structure
-2. Add configuration file
-3. Improve document loader
-4. Add OCR for images
-5. Connect Claude API
+1. File watcher or periodic re-index
+2. CLIP / image search (Phase 3)
+3. Docker and backup/restore
+4. Configuration wizard for new users

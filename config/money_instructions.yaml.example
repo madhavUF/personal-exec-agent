@@ -1,0 +1,23 @@
+# Money-Earning Agent — Your Instructions
+# Copy to money_instructions.yaml and edit with your objectives.
+# The orchestrator reads this to decide what to do next.
+
+objectives:
+  - "Find remote product manager roles (Austin or US remote)"
+  - "Apply to 5 relevant jobs per week"
+  - "Respond to Upwork invites within 24h"
+
+constraints:
+  industries_avoid: ["crypto", "gambling"]
+  min_comp: 120000
+  work_style: "remote or hybrid Austin"
+
+channels:
+  job_search: true
+  freelancing: true
+  local_gigs: false
+
+cadence:
+  job_scan_hours: [8, 14, 20]
+  outreach_followup_days: 3
+  weekly_goal_applications: 5

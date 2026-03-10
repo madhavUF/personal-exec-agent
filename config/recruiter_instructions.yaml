@@ -1,0 +1,31 @@
+# Recruiter Agent — Job Search Instructions
+# Candidate: Madhav Ayyagari — PM with 12+ years, AI/ML, Berkeley MBA
+# Resume: my_data/resume.md, my_data/Madhav_Ayyagari_Resume_LPM.pdf
+
+# Target roles (expand beyond current title)
+target_roles:
+  - "Product Manager"
+  - "Senior Product Manager"
+  - "Technical Product Manager"
+  - "AI/ML Product Manager"
+  - "Head of Product"
+
+# Location / work style
+location: "Austin, TX or US remote"
+work_style: "remote or hybrid"
+
+# Job boards to search (agent uses web search)
+sources:
+  - "LinkedIn"
+  - "Indeed"
+  - "company career pages"
+
+# Constraints
+constraints:
+  industries_avoid: ["crypto", "gambling"]
+  min_comp: 120000
+
+# Cadence (when run via orchestrator)
+cadence:
+  jobs_per_run: 5
+  follow_up_days: 3

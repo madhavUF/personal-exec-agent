@@ -112,11 +112,11 @@ python app.py
 2. Add `TELEGRAM_BOT_TOKEN=...` to `.env`
 3. Restart the server — the bot starts automatically
 
-### 6. Auto-start at login (macOS)
+### 6. Auto-start (macOS or Linux)
 
-```bash
-bash scripts/install_daemon.sh
-```
+**macOS:** `bash scripts/install_daemon.sh`
+
+**Linux (e.g. Lenovo always-on):** `sudo bash scripts/install_linux_service.sh` — see [docs/lenovo-deployment.md](docs/lenovo-deployment.md)
 
 ---
 
@@ -147,6 +147,32 @@ AGENT_GATE_KEY=dev-agent-key
 
 ---
 
+## Recruiter agent (job search)
+
+An agent that finds jobs for you using your resume. Add your resume to `my_data/resume.md`, then:
+
+```bash
+python load_documents.py   # index your resume
+python -m src.recruiter_agent
+# Or: python -m src.recruiter_agent "Find PM roles in Austin"
+```
+
+Jobs are added to the pipeline. View at `GET /api/pipeline` or run recruiter via `POST /api/recruiter`.
+
+---
+
+## Always-on money-earning agent (optional)
+
+An orchestrator that runs continuously to help you earn money — job search, freelancing, etc. Configure your objectives in `config/money_instructions.yaml`, then:
+
+```bash
+python -m src.money_agent.orchestrator --loop 30   # every 30 min
+```
+
+See [docs/always-on-money-agent.md](docs/always-on-money-agent.md) for architecture and Lenovo deployment.
+
+---
+
 ## Adding documents
 
 - **Web UI**: drag and drop files onto the dashboard (txt, md, pdf, docx, images)
@@ -160,29 +186,98 @@ AGENT_GATE_KEY=dev-agent-key
 ```
 ml-from-scratch/
 ├── app.py                  # FastAPI server + API endpoints
+├── config.yaml             # Configuration (paths, chunking, exclude, API limits)
 ├── rag.py                  # ChromaDB RAG engine
 ├── calendar_integration.py # Google Calendar OAuth + API
 ├── gmail_integration.py    # Gmail OAuth + API
 ├── load_documents.py       # Document ingestion (pdf, docx, images, txt)
 ├── load_notes.py           # Apple Notes importer
+├── config/
+│   └── money_instructions.yaml   # Objectives for always-on money agent
 ├── src/
+│   ├── config.py           # Central config + paths (from config.yaml)
 │   ├── agent.py            # Claude tool_use agent loop + session store
+│   ├── money_agent/        # Always-on orchestrator + sub-agents
 │   ├── telegram_bot.py     # Telegram bot (polling)
 │   └── menubar_app.py      # macOS menubar app (rumps)
 ├── static/
 │   └── index.html          # Web dashboard
 ├── scripts/
-│   └── install_daemon.sh   # macOS launchd installer
+│   ├── install.sh          # One-command setup (venv, deps, .env)
+│   └── install_daemon.sh  # macOS launchd installer
+├── tests/                  # pytest (config, chunking, API)
 ├── AgentGate/              # Optional credential broker (Node.js)
 ├── .env.example
+├── Dockerfile
 └── requirements.txt
 ```
 
 ---
 
+## One-command install
+
+From the repo root:
+
+```bash
+bash scripts/install.sh
+```
+
+This creates a virtualenv (`.venv`), installs dependencies, copies `.env.example` to `.env`, and optionally prompts for your Anthropic API key. Then run `source .venv/bin/activate` and `python app.py`.
+
+---
+
+## Docker
+
+```bash
+docker build -t personal-ai-agent .
+docker run -p 8000:8000 \
+  -v $(pwd)/my_data:/app/my_data \
+  -v $(pwd)/data:/app/data \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  personal-ai-agent
+```
+
+Open http://localhost:8000. Mount `my_data` and `data` so documents and ChromaDB persist.
+
+---
+
+## Testing
+
+```bash
+pip install pytest httpx   # or use project venv
+pytest tests/ -v
+```
+
+---
+
+## Configuration
+
+See `config.yaml` for: data paths, chunking (size/overlap), search weights, exclude folders/patterns (privacy), upload limit (`api.upload_max_mb`), and embedding model. The app, RAG engine, and document loader all read from it.
+
+---
+
 ## Environment variables
 
-See `.env.example` for the full list. The only required variable is `ANTHROPIC_API_KEY`.
+Use a split config:
+- `.env` for non-secret app settings
+- `credentials/.secrets.env` for secrets (API keys/tokens)
+
+Copy templates:
+
+```bash
+cp .env.example .env
+cp credentials/.secrets.env.example credentials/.secrets.env
+```
+
+Security notes:
+- `AGENT_GATE_KEY` and `APPROVAL_API_KEY` must be strong random secrets in `credentials/.secrets.env`.
+- Optional TOTP support for approvals: set `APPROVAL_TOTP_SECRET` in `credentials/.secrets.env` and `APPROVAL_AUTH_MODE` in `.env` (`key`, `totp`, `key_or_totp`, or `both`).
+- Approval-gated tools (`send_email`, `set_thermostat`) require review via `/api/approvals`.
+- Public web research is disabled by default (`ALLOW_PUBLIC_WEB_RESEARCH=false`) under strict egress policy.
+
+Backup:
+- Run `bash scripts/backup_encrypted.sh` with `BACKUP_PASSPHRASE` set.
+- Install daily cron backup with `bash scripts/install_daily_backup_cron.sh`.
 
 ---
 

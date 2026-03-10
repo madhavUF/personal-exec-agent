@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from html.parser import HTMLParser
 
+from src.egress import allow_public_web_research, ensure_allowed_url
+
 
 # =============================================================================
 # HTML → plain text extractor
@@ -55,6 +57,13 @@ def web_search(query: str, max_results: int = 5) -> dict:
     Search the web using DuckDuckGo (no API key needed).
     Returns a list of {title, url, snippet} dicts.
     """
+    if not allow_public_web_research():
+        return {
+            "error": (
+                "Public web research is disabled by egress policy. "
+                "Set ALLOW_PUBLIC_WEB_RESEARCH=true to enable."
+            )
+        }
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
@@ -76,7 +85,15 @@ def read_webpage(url: str, max_chars: int = 4000) -> dict:
     Strips scripts, styles, nav, footer, etc.
     Truncates to max_chars (default 4000) to fit model context.
     """
+    if not allow_public_web_research():
+        return {
+            "error": (
+                "Public webpage fetch is disabled by egress policy. "
+                "Set ALLOW_PUBLIC_WEB_RESEARCH=true to enable."
+            )
+        }
     try:
+        ensure_allowed_url(url)
         req = urllib.request.Request(
             url,
             headers={

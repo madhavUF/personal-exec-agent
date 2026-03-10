@@ -22,6 +22,7 @@ Usage:
 
 import os
 import json
+import fnmatch
 from datetime import datetime
 from pathlib import Path
 
@@ -71,21 +72,45 @@ def _get_ocr_predictor():
         return None
 
 # =============================================================================
-# Configuration
+# Configuration (from config.yaml via src.config)
 # =============================================================================
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
-DATA_FOLDER = os.path.join(_BASE, 'my_data')
-OUTPUT_FILE = os.path.join(_BASE, 'data', 'documents.json')
-MIN_TEXT_THRESHOLD = 100  # chars below which we try OCR
+def _get_data_folder():
+    from src.config import get_data_folder
+    return str(get_data_folder())
+
+def _get_output_file():
+    from src.config import get_docs_path
+    return str(get_docs_path())
+
+def _get_chunking():
+    from src.config import get_chunking
+    return get_chunking()
+
+def _get_exclude_folders():
+    from src.config import get_exclude_folders
+    return get_exclude_folders()
+
+def _get_exclude_patterns():
+    from src.config import get_exclude_patterns
+    return get_exclude_patterns()
+
+def _get_ocr_threshold():
+    from src.config import get_ocr_min_text_threshold
+    return get_ocr_min_text_threshold()
+
+# Legacy names for code that imports load_documents (e.g. app.py)
+DATA_FOLDER = _get_data_folder()
+OUTPUT_FILE = _get_output_file()
 
 # =============================================================================
 # Create data folder if it doesn't exist
 # =============================================================================
 
 os.makedirs(DATA_FOLDER, exist_ok=True)
-print(f"Data folder: {DATA_FOLDER}")
-print()
+if __name__ == "__main__":
+    print(f"Data folder: {DATA_FOLDER}")
+    print()
 
 # =============================================================================
 # Load functions for different file types
@@ -155,7 +180,7 @@ def load_pdf(filepath):
     title = Path(filepath).stem.replace('_', ' ').replace('-', ' ').title()
 
     # If we got very little text, try OCR
-    if len(content.strip()) < MIN_TEXT_THRESHOLD:
+    if len(content.strip()) < _get_ocr_threshold():
         print(f"    → Low text ({len(content.strip())} chars), trying OCR for {Path(filepath).name}...")
         ocr_text = ocr_pdf(filepath)
         if ocr_text and len(ocr_text.strip()) > len(content.strip()):
@@ -289,6 +314,29 @@ def chunk_text(text, chunk_size=500, overlap=50):
 
     return chunks
 
+
+def chunk_text_smart(text, chunk_size=500, overlap=50, is_markdown=False):
+    """
+    Chunk text with optional section-awareness for Markdown.
+    For .md content with ## headers, splits by section first so chunks
+    don't break mid-section.
+    """
+    if not is_markdown or "##" not in text:
+        return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+    import re
+    # Split by newline + ## (or ### etc.), keep first block as intro
+    sections = re.split(r'\n##+\s+', text, flags=re.MULTILINE)
+    if len(sections) <= 1:
+        return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+    result = []
+    for part in sections:
+        part = part.strip()
+        if not part:
+            continue
+        for c in chunk_text(part, chunk_size=chunk_size, overlap=overlap):
+            result.append(c)
+    return result if result else chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+
 # =============================================================================
 # Main loader
 # =============================================================================
@@ -316,9 +364,20 @@ def load_all_documents():
     loaders['.jpeg'] = load_image
     loaders['.png'] = load_image
 
-    # Walk through all files in data folder
+    # Respect exclude lists from config (privacy)
+    exclude_folders = set(_get_exclude_folders())
+    exclude_patterns = _get_exclude_patterns()
+    chunk_cfg = _get_chunking()
+    chunk_size = chunk_cfg.get("chunk_size", 500)
+    overlap = chunk_cfg.get("overlap", 50)
+
     for root, dirs, files in os.walk(DATA_FOLDER):
+        # Don't descend into excluded directories
+        dirs[:] = [d for d in dirs if d not in exclude_folders]
         for filename in sorted(files):
+            # Skip files matching exclude patterns
+            if exclude_patterns and any(fnmatch.fnmatch(filename, p) for p in exclude_patterns):
+                continue
             filepath = os.path.join(root, filename)
             ext = Path(filename).suffix.lower()
 
@@ -328,8 +387,11 @@ def load_all_documents():
                     rel_path = os.path.relpath(filepath, DATA_FOLDER)
                     content = doc_data['content']
 
-                    # Chunk large documents
-                    chunks = chunk_text(content, chunk_size=500, overlap=50)
+                    # Chunk large documents (from config); section-aware for Markdown
+                    chunks = chunk_text_smart(
+                        content, chunk_size=chunk_size, overlap=overlap,
+                        is_markdown=(ext == ".md")
+                    )
 
                     if len(chunks) == 1:
                         # Small document - keep as is

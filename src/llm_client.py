@@ -25,8 +25,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.egress import ensure_allowed_url
+from src.env_loader import load_env
+load_env()
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,9 @@ class NormalizedResponse:
     stop_reason: str                    # "end_turn" | "tool_use"
     text: str                           # final assistant text (empty during tool_use)
     tool_calls: list[dict]              # [{"id": str, "name": str, "input": dict}]
+    provider: str = ""                  # "claude" | "groq" | "openai" | "ollama" | ...
+    model: str = ""                     # model name used for this call
+    usage: dict = field(default_factory=dict)  # normalized usage tokens/cost-like fields (best-effort)
     raw: Any = field(default=None, repr=False)  # original SDK object (for serialisation)
 
 
@@ -118,18 +122,47 @@ class ClaudeClient(LLMClient):
             messages=messages,
         )
 
+        usage = {}
+        try:
+            # Anthropic usage fields vary by SDK/version; normalize best-effort.
+            u = getattr(response, "usage", None)
+            if u is not None:
+                usage = {
+                    "input": getattr(u, "input_tokens", 0) or 0,
+                    "output": getattr(u, "output_tokens", 0) or 0,
+                    "cacheRead": getattr(u, "cache_read_input_tokens", 0) or 0,
+                    "cacheWrite": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                }
+                usage["totalTokens"] = usage["input"] + usage["output"] + usage["cacheRead"] + usage["cacheWrite"]
+        except Exception:
+            usage = {}
+
         if response.stop_reason == "tool_use":
             calls = [
                 {"id": b.id, "name": b.name, "input": b.input}
                 for b in response.content
                 if b.type == "tool_use"
             ]
-            return NormalizedResponse(stop_reason="tool_use", text="",
-                                      tool_calls=calls, raw=response)
+            return NormalizedResponse(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=calls,
+                provider="claude",
+                model=self.model,
+                usage=usage,
+                raw=response,
+            )
 
         text = next((b.text for b in response.content if hasattr(b, "text")), "")
-        return NormalizedResponse(stop_reason="end_turn", text=text,
-                                  tool_calls=[], raw=response)
+        return NormalizedResponse(
+            stop_reason="end_turn",
+            text=text,
+            tool_calls=[],
+            provider="claude",
+            model=self.model,
+            usage=usage,
+            raw=response,
+        )
 
     def build_tool_result_messages(self, tool_calls: list[dict],
                                    results: list[str]) -> list[dict]:
@@ -164,6 +197,7 @@ class OpenAICompatClient(LLMClient):
 
     def __init__(self, model: str, base_url: str, api_key: str, provider: str):
         from openai import OpenAI
+        ensure_allowed_url(base_url)
         self.model    = model
         self.provider = provider
         self._client  = OpenAI(base_url=base_url, api_key=api_key)
@@ -195,21 +229,51 @@ class OpenAICompatClient(LLMClient):
         choice  = response.choices[0]
         message = choice.message
 
+        usage = {}
+        try:
+            u = getattr(response, "usage", None)
+            if u is not None:
+                prompt = getattr(u, "prompt_tokens", 0) or 0
+                completion = getattr(u, "completion_tokens", 0) or 0
+                total = getattr(u, "total_tokens", prompt + completion) or (prompt + completion)
+                usage = {"input": prompt, "output": completion, "totalTokens": total}
+        except Exception:
+            usage = {}
+
         if choice.finish_reason == "tool_calls" and message.tool_calls:
+            def _parse_input(tc):
+                try:
+                    return json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except (json.JSONDecodeError, TypeError):
+                    return {}
             calls = [
                 {
                     "id":    tc.id,
                     "name":  tc.function.name,
-                    "input": json.loads(tc.function.arguments),
+                    "input": _parse_input(tc),
                 }
                 for tc in message.tool_calls
             ]
-            return NormalizedResponse(stop_reason="tool_use", text="",
-                                      tool_calls=calls, raw=response)
+            return NormalizedResponse(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=calls,
+                provider=self.provider,
+                model=self.model,
+                usage=usage,
+                raw=response,
+            )
 
         text = message.content or ""
-        return NormalizedResponse(stop_reason="end_turn", text=text,
-                                  tool_calls=[], raw=response)
+        return NormalizedResponse(
+            stop_reason="end_turn",
+            text=text,
+            tool_calls=[],
+            provider=self.provider,
+            model=self.model,
+            usage=usage,
+            raw=response,
+        )
 
     def build_tool_result_messages(self, tool_calls: list[dict],
                                    results: list[str]) -> list[dict]:

@@ -1,5 +1,6 @@
 # Environment & secrets
 .env
+credentials/.secrets.env
 token.json
 credentials.json
 
@@ -7,6 +8,7 @@ credentials.json
 data/
 my_data/
 logs/
+backups/
 
 # Python
 __pycache__/

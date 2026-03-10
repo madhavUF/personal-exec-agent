@@ -25,23 +25,18 @@ import json
 import os
 import re
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.env_loader import load_env
+load_env()
 
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCS_PATH = os.path.join(PROJECT_DIR, 'data/documents.json')
-CHROMA_PATH = os.path.join(PROJECT_DIR, 'data/chroma_db')
-
-# Search weights
-SEMANTIC_WEIGHT = 0.7
-KEYWORD_WEIGHT = 0.3
-TOP_K = 5
-MAX_TOKENS = 1024
+from src.config import (
+    get_docs_path_str,
+    get_chroma_path,
+    get_search_settings,
+    get_embeddings_model,
+    get_vector_db_collection,
+    get_llm_settings,
+    PROJECT_DIR,
+)
 
 
 # =============================================================================
@@ -68,25 +63,29 @@ class RAGEngine:
 
         print("Loading RAG system...")
 
-        # Load documents
-        if not os.path.exists(DOCS_PATH):
+        docs_path = get_docs_path_str()
+        chroma_path = str(get_chroma_path())
+        search_cfg = get_search_settings()
+        llm_cfg = get_llm_settings()
+
+        if not os.path.exists(docs_path):
             raise FileNotFoundError(
-                f"{DOCS_PATH} not found. Run 'python load_documents.py' first."
+                f"{docs_path} not found. Run 'python load_documents.py' first."
             )
 
-        with open(DOCS_PATH, 'r') as f:
+        with open(docs_path, 'r') as f:
             self._documents = json.load(f)
 
         print(f"  Loaded {len(self._documents)} document chunks")
 
-        # Load embedding model
-        self._model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Load embedding model from config
+        self._model = SentenceTransformer(get_embeddings_model())
 
         # Initialize ChromaDB
-        os.makedirs(CHROMA_PATH, exist_ok=True)
-        self._chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+        os.makedirs(chroma_path, exist_ok=True)
+        self._chroma_client = chromadb.PersistentClient(path=chroma_path)
         self._collection = self._chroma_client.get_or_create_collection(
-            name="personal_docs",
+            name=get_vector_db_collection(),
             metadata={"hnsw:space": "cosine"}
         )
 
@@ -97,7 +96,7 @@ class RAGEngine:
         self._sync_collection()
 
         # Remove old embeddings.npy if it exists
-        old_embeddings = os.path.join(PROJECT_DIR, 'data/embeddings.npy')
+        old_embeddings = str(PROJECT_DIR / "data" / "embeddings.npy")
         if os.path.exists(old_embeddings):
             os.remove(old_embeddings)
             print("  Removed old embeddings.npy (now using ChromaDB)")
@@ -175,8 +174,10 @@ class RAGEngine:
         matches = sum(1 for word in query_words if word_matches(word, content_clean))
         return matches / len(query_words)
 
-    def search(self, query, top_k=TOP_K):
+    def search(self, query, top_k=None):
         """Hybrid search: ChromaDB semantic similarity + keyword re-ranking."""
+        if top_k is None:
+            top_k = get_search_settings().get("top_k", 5)
         self._initialize()
 
         query_embedding = self._model.encode(query).tolist()
@@ -190,14 +191,16 @@ class RAGEngine:
         if not chroma_results['ids'][0]:
             return []
 
+        search_cfg = get_search_settings()
+        sem_w = search_cfg.get("semantic_weight", 0.7)
+        kw_w = search_cfg.get("keyword_weight", 0.3)
         candidates = []
         for i, doc_id in enumerate(chroma_results['ids'][0]):
             semantic_sim = 1.0 - chroma_results['distances'][0][i]
             content = chroma_results['documents'][0][i]
             metadata = chroma_results['metadatas'][0][i]
-
             kw_score = self._keyword_score(query, metadata.get('title', '') + ' ' + content)
-            combined = SEMANTIC_WEIGHT * semantic_sim + KEYWORD_WEIGHT * kw_score
+            combined = sem_w * semantic_sim + kw_w * kw_score
 
             candidates.append({
                 'id': doc_id,
@@ -243,10 +246,11 @@ QUESTION: {query}"""
 
         prompt = self._build_prompt(query, results)
 
+        llm_cfg = get_llm_settings()
         try:
             message = self._claude_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=MAX_TOKENS,
+                model=llm_cfg.get("model", "claude-sonnet-4-20250514"),
+                max_tokens=llm_cfg.get("max_tokens", 1024),
                 messages=[
                     {"role": "user", "content": prompt}
                 ]
